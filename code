@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Radar Analiz: k-NN & k-Means</title>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #38bdf8;
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            text-shadow: 0 0 10px #38bdf8;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #38bdf8;
+            display: flex;
+            gap: 20px;
+        }
+
+        button {
+            background: #0ea5e9;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #0284c7;
+            box-shadow: 0 0 15px #0ea5e9;
+        }
+
+        canvas {
+            background: radial-gradient(circle, #1e293b 0%, #0f172a 80%);
+            border: 2px solid #38bdf8;
+            border-radius: 50%;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
+            cursor: crosshair;
+        }
+
+        .legend {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #fff;
+            height: 30px;
+        }
+
+        #kInput {
+            width: 50px;
+            background: #0f172a;
+            color: white;
+            border: 1px solid #38bdf8;
+            padding: 5px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>[RADAR_SİSTEMİ] v2.0</h1>
+
+    <div class="controls">
+        <div>
+            <h3>Mod 1: k-NN (Dost/Düşman Tanıma)</h3>
+            <label>K Değeri:</label> <input type="number" id="kInput" value="3" min="1" max="9">
+            <p style="font-size:12px; color:#94a3b8;">Ekrana tıkla, en yakın K komşuya sor.</p>
+        </div>
+        <div style="border-left: 1px solid #38bdf8; padding-left: 20px;">
+            <h3>Mod 2: k-Means (Gizli Grupları Bul)</h3>
+            <button onclick="runKMeans()">Gruplamayı Başlat (K=2)</button>
+            <button onclick="resetData()">Radarı Temizle</button>
+        </div>
+    </div>
+
+    <canvas id="radar" width="500" height="500"></canvas>
+    <div class="status" id="statusText">Sistem Hazır. Analiz bekliyor...</div>
+
+    <div class="legend">
+        <span style="color:#ef4444">■ Düşman (Red)</span> |
+        <span style="color:#22c55e">■ Dost (Green)</span> |
+        <span style="color:#fbbf24">■ Bilinmeyen (Yellow)</span> |
+        <span style="color:#fff">✖ Merkez Noktası (Centroid)</span>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('radar');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('statusText');
+        let points = [];
+        let centroids = [];
+        let mode = 'knn'; // Varsayılan mod
+
+        // --- VERİ OLUŞTURMA (TUZAK VERİ SETİ) ---
+        function resetData() {
+            points = [];
+            centroids = [];
+            // Düşmanlar (Sol Üst Köşe - Sıkı Küme)
+            for (let i = 0; i < 15; i++) points.push({ x: 100 + Math.random() * 80, y: 100 + Math.random() * 80, type: 'enemy', cluster: null });
+            // Dostlar (Sağ Alt Köşe - Dağınık Küme)
+            for (let i = 0; i < 15; i++) points.push({ x: 350 + Math.random() * 100, y: 350 + Math.random() * 100, type: 'friend', cluster: null });
+            // Araya Karışmış Casuslar (Dostların içine sızmış düşmanlar)
+            points.push({ x: 360, y: 360, type: 'enemy', cluster: null });
+            points.push({ x: 370, y: 350, type: 'enemy', cluster: null });
+
+            draw();
+            statusText.innerText = "Radar taraması tamamlandı. Veriler yüklendi.";
+        }
+
+        // --- ÇİZİM FONKSİYONU ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Radar Çizgileri
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.2)";
+            ctx.beginPath(); ctx.arc(250, 250, 100, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(250, 250, 200, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(250, 0); ctx.lineTo(250, 500); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, 250); ctx.lineTo(500, 250); ctx.stroke();
+
+            // Noktaları Çiz
+            points.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                // k-NN modunda orijinal renkler, k-Means modunda küme renkleri
+                if (centroids.length > 0 && p.cluster !== null) {
+                    ctx.fillStyle = p.cluster === 0 ? '#ef4444' : '#22c55e'; // Küme renkleri
+                } else {
+                    ctx.fillStyle = p.type === 'enemy' ? '#ef4444' : '#22c55e';
+                }
+                ctx.fill();
+            });
+
+            // k-Means Merkezlerini Çiz
+            centroids.forEach(c => {
+                ctx.font = "24px Arial";
+                ctx.fillStyle = "#fff";
+                ctx.fillText("✖", c.x - 10, c.y + 10);
+                ctx.strokeStyle = "#fff";
+                ctx.strokeRect(c.x - 15, c.y - 15, 30, 30);
+            });
+        }
+
+        // --- k-NN ALGORİTMASI ---
+        canvas.addEventListener('click', (e) => {
+            if (centroids.length > 0) {
+                statusText.innerText = "Önce 'Radarı Temizle' butonuna basarak k-Means modundan çıkın.";
+                return;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Tıklanan yere sarı nokta koy
+            ctx.beginPath(); ctx.arc(mouseX, mouseY, 8, 0, Math.PI * 2);
+            ctx.fillStyle = '#fbbf24'; ctx.fill();
+
+            // Mesafeleri Hesapla (Öklid)
+            const k = parseInt(document.getElementById('kInput').value);
+            const distances = points.map(p => {
+                return {
+                    type: p.type,
+                    dist: Math.sqrt((p.x - mouseX) ** 2 + (p.y - mouseY) ** 2)
+                };
+            });
+
+            // Sırala ve ilk K tanesini al
+            distances.sort((a, b) => a.dist - b.dist);
+            const neighbors = distances.slice(0, k);
+
+            // Oylama Yap
+            let enemyCount = neighbors.filter(n => n.type === 'enemy').length;
+            let friendCount = neighbors.filter(n => n.type === 'friend').length;
+
+            let result = enemyCount > friendCount ? "DÜŞMAN" : "DOST";
+            let color = result === "DÜŞMAN" ? "red" : "#22c55e";
+
+            statusText.innerHTML = `Analiz: <span style="color:${color}">${result}</span> (${k} komşudan ${enemyCount} düşman, ${friendCount} dost)`;
+        });
+
+        // --- k-Means ALGORİTMASI ---
+        function runKMeans() {
+            // 1. Rastgele 2 merkez ata (Başlangıç)
+            if (centroids.length === 0) {
+                centroids = [
+                    { x: Math.random() * 500, y: Math.random() * 500 },
+                    { x: Math.random() * 500, y: Math.random() * 500 }
+                ];
+            } else {
+                // Sonraki adımlar: Merkezleri güncelle
+                updateCentroids();
+            }
+
+            // 2. Noktaları en yakın merkeze ata
+            assignClusters();
+            draw();
+            statusText.innerText = "k-Means: Merkezler güncellendi. (Tekrar basarak iyileştir)";
+        }
+
+        function assignClusters() {
+            points.forEach(p => {
+                let d0 = Math.sqrt((p.x - centroids[0].x) ** 2 + (p.y - centroids[0].y) ** 2);
+                let d1 = Math.sqrt((p.x - centroids[1].x) ** 2 + (p.y - centroids[1].y) ** 2);
+                p.cluster = d0 < d1 ? 0 : 1;
+            });
+        }
+
+        function updateCentroids() {
+            [0, 1].forEach(clusterIdx => {
+                const clusterPoints = points.filter(p => p.cluster === clusterIdx);
+                if (clusterPoints.length > 0) {
+                    let sumX = 0, sumY = 0;
+                    clusterPoints.forEach(p => { sumX += p.x; sumY += p.y; });
+                    centroids[clusterIdx].x = sumX / clusterPoints.length;
+                    centroids[clusterIdx].y = sumY / clusterPoints.length;
+                }
+            });
+        }
+
+        // Başlangıçta verileri yükle
+        resetData();
+    </script>
+
+</body>
+
+</html>
